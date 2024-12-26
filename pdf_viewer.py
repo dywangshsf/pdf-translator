@@ -344,8 +344,8 @@ class PDFViewer(QMainWindow):
                 border-radius: 3px;
                 font-weight: bold;
                 min-height: 24px;
-                min-width: 50px;
-                max-width: 50px;
+                min-width: 60px;
+                max-width: 60px;
             }
             QPushButton:hover {
                 background-color: #45a049;
@@ -409,6 +409,25 @@ class PDFViewer(QMainWindow):
         """)
         right_layout.addWidget(self.translated_text)
         
+        # Add progress bar (initially hidden)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                text-align: center;
+                height: 24px;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+            }
+        """)
+        self.progress_bar.hide()  # Hide initially
+        right_layout.addWidget(self.progress_bar)
+        
+        # Move progress bar between the translate button and translation output
+        right_layout.insertWidget(right_layout.indexOf(self.translated_label), self.progress_bar)
+        
         splitter.addWidget(right_widget)
         splitter.setSizes([750, 250])
         
@@ -437,7 +456,7 @@ class PDFViewer(QMainWindow):
         self.translation_prompt = (
             "You are a professional translator. Translate the following text to "
             "{target_lang} sentence by sentence. Keep the original structure and "
-            "meaning. Output the translation only, no other text:\n\n{text}"
+            "meaning. Output the translation only, don't output any explanation text:\n\n{text}"
         )
 
     def initialize_models(self):
@@ -456,8 +475,8 @@ class PDFViewer(QMainWindow):
 
             self.available_models = models
             
-            # Try to set llama2:latest as default model
-            preferred_model = "gemma:2b-instruct"
+            # Try to set yi:latest as default model
+            preferred_model = "yi:latest"
             if preferred_model in models:
                 self.current_model = preferred_model
             else:
@@ -819,18 +838,43 @@ class PDFViewer(QMainWindow):
             self.translate_button.setText("...")
             
             # Split text into blocks (paragraphs)
-            blocks = text.split('\n\n')
-            translated_blocks = []
+            blocks = [b for b in text.split('\n\n') if b.strip()]
+            total_blocks = len(blocks)
             
-            for block in blocks:
-                if block.strip():  # Only translate non-empty blocks
-                    translated_block = self.translate_text(block.strip())
-                    translated_blocks.append(translated_block)
-                    time.sleep(0.5)  # Small delay between blocks
+            # Show and reset progress bar
+            self.progress_bar.setMaximum(total_blocks)
+            self.progress_bar.setValue(0)
+            self.progress_bar.show()
             
-            # Join blocks with double newlines to maintain paragraph structure
-            final_translation = '\n\n'.join(translated_blocks)
-            self.translated_text.setPlainText(final_translation)
+            # Clear translation area
+            self.translated_text.clear()
+            
+            # Create cursor for appending text
+            cursor = self.translated_text.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            
+            for i, block in enumerate(blocks, 1):
+                # Update progress bar and status
+                self.progress_bar.setValue(i)
+                self.statusBar().showMessage(f"Translating block {i} of {total_blocks}")
+                
+                # Translate block
+                translated_block = self.translate_text(block.strip())
+                
+                # Append the translated block
+                if i > 1:  # Add newlines before blocks after the first one
+                    cursor.insertText("\n\n")
+                cursor.insertText(translated_block)
+                
+                # Scroll to the bottom
+                self.translated_text.setTextCursor(cursor)
+                self.translated_text.ensureCursorVisible()
+                
+                # Process events to keep UI responsive
+                QApplication.processEvents()
+                
+                # Small delay between blocks
+                time.sleep(0.5)
             
             self.statusBar().showMessage("Translation completed")
         except Exception as e:
@@ -838,7 +882,8 @@ class PDFViewer(QMainWindow):
             self.translated_text.setPlainText(f"Translation failed: {str(e)}")
         finally:
             self.translate_button.setEnabled(True)
-            self.translate_button.setText("翻译")
+            self.translate_button.setText("Translate")  # Reset to English text
+            self.progress_bar.hide()
 
     def translate_text(self, text: str) -> str:
         """Translate text using selected Ollama model"""
@@ -850,9 +895,10 @@ class PDFViewer(QMainWindow):
             
             # Use the customizable prompt
             target_lang = self.language_combo.currentText()
-            prompt = self.translation_prompt.format(
-                target_lang=target_lang,
-                text=text
+            prompt = (
+                f"You are a professional translator. Translate the following text to "
+                f"{target_lang}. Output ONLY the translation, without any explanations, "
+                f"notes, or special tokens. Keep the original structure and meaning:\n\n{text}"
             )
             
             payload = {
@@ -870,18 +916,26 @@ class PDFViewer(QMainWindow):
             result = response.json()
             translated_text = result.get('response', '').strip()
             
-            # Clean up the response to remove any potential explanations
-            # Remove common patterns that might indicate explanations
+            # Clean up the response to remove special tokens and markers
             patterns_to_remove = [
+                r'<\|next_token\|>',
+                r'<\|im_start\|>',
+                r'<\|im_end\|>',
+                r'<\|end\|>',
+                r'\| 翻译 \|',
                 r'^Translation:\s*',
+                r'^这是.*翻译.*$',
                 r'^Here\'s the translation:\s*',
                 r'\nNote:.*$',
-                r'\nExplanation:.*$',
-                r'\n\n.*$'  # Remove anything after double newline
+                r'\nExplanation:.*$'
             ]
             
             for pattern in patterns_to_remove:
-                translated_text = re.sub(pattern, '', translated_text, flags=re.MULTILINE)
+                translated_text = re.sub(pattern, '', translated_text, flags=re.MULTILINE | re.IGNORECASE)
+            
+            # Remove any lines that are just whitespace or empty
+            lines = [line.strip() for line in translated_text.split('\n') if line.strip()]
+            translated_text = '\n'.join(lines)
             
             if not translated_text:
                 raise Exception("No translation received from the API")
