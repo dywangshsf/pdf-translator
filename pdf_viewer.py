@@ -349,48 +349,8 @@ class PDFViewer(QMainWindow):
         # Clean up the text
         cleaned_text = self.clean_text(text)
         
-        # Convert paragraphs to HTML with styling
-        paragraphs = cleaned_text.split('\n\n')
-        
-        html_text = '''
-            <html>
-            <head>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    line-height: 1.4;
-                    margin: 0;
-                    padding: 10px;
-                }
-                .paragraph {
-                    margin: 0;
-                    padding: 0;
-                }
-                .paragraph + .paragraph {
-                    margin-top: 1.5em;  /* Space between paragraphs */
-                }
-                .title {
-                    font-weight: bold;
-                    font-size: 1.1em;
-                    margin-bottom: 0.8em;
-                }
-            </style>
-            </head>
-            <body>
-        '''
-        
-        for p in paragraphs:
-            if p.strip():
-                # Check if this might be a title (you can adjust these conditions)
-                if len(p.split()) <= 7 or p.isupper() or p.endswith(':'):
-                    html_text += f'<div class="paragraph title">{p}</div>'
-                else:
-                    html_text += f'<div class="paragraph">{p}</div>'
-        
-        html_text += '</body></html>'
-        
-        # Set HTML text
-        self.text_edit.setHtml(html_text)
+        # Set plain text instead of HTML
+        self.text_edit.setPlainText(cleaned_text)  # Changed from setHtml to setPlainText
         self.statusBar().showMessage(f"Selected {len(cleaned_text)} characters")
 
     def clean_text(self, text):
