@@ -3,6 +3,11 @@ from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 import fitz  # PyMuPDF
 import sys
+import requests  # Ensure requests library is available
+import json
+import time
+from typing import List, Optional
+import re
 
 class PDFGraphicsView(QGraphicsView):
     """Custom QGraphicsView for handling text selection"""
@@ -170,11 +175,52 @@ class PDFGraphicsView(QGraphicsView):
         
         return final_text  # Return the final processed text
 
+class PromptEditorDialog(QDialog):
+    def __init__(self, current_prompt, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Translation Prompt Editor")
+        self.setMinimumSize(600, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Prompt editor
+        self.prompt_edit = QTextEdit()
+        self.prompt_edit.setPlainText(current_prompt)
+        self.prompt_edit.setStyleSheet("""
+            QTextEdit {
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: monospace;
+                font-size: 12px;
+            }
+        """)
+        layout.addWidget(self.prompt_edit)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | 
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def get_prompt(self):
+        return self.prompt_edit.toPlainText()
+
 class PDFViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PDF Viewer with Text Selection")
         self.setGeometry(100, 100, 1200, 800)
+        
+        # Add model management
+        self.available_models = []
+        self.current_model = None
+        
+        # Initialize models before setting up UI
+        self.initialize_models()
         
         # Create central widget and layout
         central_widget = QWidget()
@@ -209,26 +255,162 @@ class PDFViewer(QMainWindow):
         left_layout.addWidget(self.pdf_view)  # Add PDF view to layout
         splitter.addWidget(left_widget)  # Add left widget to splitter
         
-        # Right side: Selected text panel
+        # Define target languages
+        self.target_languages = {
+            "简体中文": "zh-CN",
+            "繁體中文": "zh-TW",
+            "日本語": "ja",
+            "한국어": "ko",
+            "Español": "es",
+            "Français": "fr",
+            "Deutsch": "de"
+        }
+
+        # Right side panel layout
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(10, 10, 10, 10)
+        right_layout.setSpacing(5)
         
-        self.text_label = QLabel("Selected Text:")  # Label for selected text
+        # Selected text section
+        self.text_label = QLabel("Selected Text:")
+        self.text_label.setStyleSheet("""
+            QLabel {
+                font-weight: bold;
+                font-size: 11px;
+                color: #333;
+            }
+        """)
         right_layout.addWidget(self.text_label)
         
-        self.text_edit = QTextEdit()  # Text edit for displaying selected text
-        self.text_edit.setReadOnly(True)  # Make it read-only
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setStyleSheet("""
+            QTextEdit {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 4px;
+                background-color: #ffffff;
+                min-height: 100px;
+            }
+        """)
         right_layout.addWidget(self.text_edit)
         
-        # Add copy button
-        self.copy_button = QPushButton("Copy to Clipboard")  # Button to copy text
-        self.copy_button.clicked.connect(self.copy_text)  # Connect to copy function
-        right_layout.addWidget(self.copy_button)
+        # Create horizontal layout for controls
+        controls_layout = QHBoxLayout()
+        controls_layout.setSpacing(8)  # Space between controls
         
-        splitter.addWidget(right_widget)  # Add right widget to splitter
+        # Model selection combo box
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(self.available_models)
+        self.model_combo.setCurrentText(self.current_model)
+        self.model_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 3px;
+                min-width: 120px;
+                max-width: 120px;
+                min-height: 24px;
+            }
+        """)
+        self.model_combo.currentTextChanged.connect(self.change_model)
+        controls_layout.addWidget(self.model_combo)
         
-        # Set splitter sizes
-        splitter.setSizes([800, 400])  # Set initial sizes for splitter
+        # Target language combo box
+        self.language_combo = QComboBox()
+        self.language_combo.addItems(self.target_languages.keys())
+        self.language_combo.setCurrentText("简体中文")  # Set default to Simplified Chinese
+        self.language_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 3px;
+                min-width: 90px;
+                max-width: 90px;
+                min-height: 24px;
+            }
+        """)
+        controls_layout.addWidget(self.language_combo)
+        
+        # Translate button
+        self.translate_button = QPushButton("Translate")
+        self.translate_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                padding: 4px 12px;
+                border: none;
+                border-radius: 3px;
+                font-weight: bold;
+                min-height: 24px;
+                min-width: 50px;
+                max-width: 50px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #3d8b40;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
+        self.translate_button.setToolTip("Translate text")
+        self.translate_button.clicked.connect(self.translate_selected_text)
+        controls_layout.addWidget(self.translate_button)
+        
+        # Add prompt editor button
+        self.prompt_button = QPushButton("📝")  # Using emoji as icon
+        self.prompt_button.setToolTip("Edit Translation Prompt")
+        self.prompt_button.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 3px;
+                min-width: 24px;
+                max-width: 24px;
+                min-height: 24px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #f0f0f0;
+            }
+        """)
+        self.prompt_button.clicked.connect(self.edit_prompt)
+        controls_layout.addWidget(self.prompt_button)
+        
+        # Add controls layout to main layout
+        right_layout.addLayout(controls_layout)
+        
+        # Translation output section
+        self.translated_label = QLabel("Translation:")
+        self.translated_label.setStyleSheet("""
+            QLabel {
+                font-weight: bold;
+                font-size: 11px;
+                color: #333;
+                padding: 2px 0;
+            }
+        """)
+        right_layout.addWidget(self.translated_label)
+        
+        self.translated_text = QTextEdit()
+        self.translated_text.setReadOnly(True)
+        self.translated_text.setStyleSheet("""
+            QTextEdit {
+                border: 1px solid #ddd;
+                border-radius: 3px;
+                padding: 4px;
+                background-color: #f5f5f5;
+                min-height: 100px;
+            }
+        """)
+        right_layout.addWidget(self.translated_text)
+        
+        splitter.addWidget(right_widget)
+        splitter.setSizes([750, 250])
         
         # Connect text selection signal
         self.pdf_view.textSelected.connect(self.update_selected_text)  # Update text when selected
@@ -250,6 +432,61 @@ class PDFViewer(QMainWindow):
         
         # Status bar
         self.statusBar().showMessage("Ready")  # Initial status message
+
+        # Add default prompt
+        self.translation_prompt = (
+            "You are a professional translator. Translate the following text to "
+            "{target_lang} sentence by sentence. Keep the original structure and "
+            "meaning. Output the translation only, no other text:\n\n{text}"
+        )
+
+    def initialize_models(self):
+        """Initialize and verify Ollama models"""
+        try:
+            # Get available models from Ollama
+            models = self.get_ollama_models()
+            
+            if not models:
+                QMessageBox.warning(
+                    self,
+                    "No Models Found",
+                    "No Ollama models found. Please install at least one model using 'ollama pull <model>'"
+                )
+                return
+
+            self.available_models = models
+            
+            # Try to set llama2:latest as default model
+            preferred_model = "gemma:2b-instruct"
+            if preferred_model in models:
+                self.current_model = preferred_model
+            else:
+                # If preferred model not available, use the first available model
+                self.current_model = models[0]
+            
+            self.statusBar().showMessage(f"Using model: {self.current_model}")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Ollama Connection Error",
+                f"Could not connect to Ollama service: {str(e)}\n\n"
+                "Please ensure Ollama is installed and running."
+            )
+
+    def get_ollama_models(self) -> List[str]:
+        """Get list of available Ollama models"""
+        try:
+            response = requests.get("http://localhost:11434/api/tags")
+            response.raise_for_status()
+            
+            models_data = response.json().get('models', [])
+            return [model['name'] for model in models_data]
+            
+        except requests.exceptions.ConnectionError:
+            raise Exception("Could not connect to Ollama service. Is it running?")
+        except Exception as e:
+            raise Exception(f"Failed to get models: {str(e)}")
 
     def create_toolbar(self):
         """Create the toolbar with various buttons"""
@@ -554,6 +791,121 @@ class PDFViewer(QMainWindow):
         """Save the translation to a file or database"""
         with open("translations.txt", "a") as f:
             f.write(f"Original: {original_text}\nTranslated: {translated_text} ({language})\n\n")
+
+    def translate_selected_text(self):
+        """Translate the selected text into Chinese using Ollama"""
+        if not self.current_model:
+            QMessageBox.warning(
+                self,
+                "No Model Selected",
+                "Please select a translation model first."
+            )
+            return
+
+        text = self.text_edit.toPlainText()
+        
+        # Check if text is empty or None
+        if not text or text.isspace():
+            QMessageBox.warning(
+                self,
+                "No Text Selected",
+                "Please select some text to translate."
+            )
+            return
+            
+        try:
+            self.statusBar().showMessage("Translating...")
+            self.translate_button.setEnabled(False)
+            self.translate_button.setText("...")
+            
+            # Split text into blocks (paragraphs)
+            blocks = text.split('\n\n')
+            translated_blocks = []
+            
+            for block in blocks:
+                if block.strip():  # Only translate non-empty blocks
+                    translated_block = self.translate_text(block.strip())
+                    translated_blocks.append(translated_block)
+                    time.sleep(0.5)  # Small delay between blocks
+            
+            # Join blocks with double newlines to maintain paragraph structure
+            final_translation = '\n\n'.join(translated_blocks)
+            self.translated_text.setPlainText(final_translation)
+            
+            self.statusBar().showMessage("Translation completed")
+        except Exception as e:
+            self.statusBar().showMessage(f"Translation error: {str(e)}")
+            self.translated_text.setPlainText(f"Translation failed: {str(e)}")
+        finally:
+            self.translate_button.setEnabled(True)
+            self.translate_button.setText("翻译")
+
+    def translate_text(self, text: str) -> str:
+        """Translate text using selected Ollama model"""
+        if not self.current_model:
+            raise Exception("No translation model selected")
+
+        try:
+            url = "http://localhost:11434/api/generate"
+            
+            # Use the customizable prompt
+            target_lang = self.language_combo.currentText()
+            prompt = self.translation_prompt.format(
+                target_lang=target_lang,
+                text=text
+            )
+            
+            payload = {
+                "model": self.current_model,
+                "prompt": prompt,
+                "stream": False,
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "top_k": 40
+            }
+            
+            response = requests.post(url, json=payload)
+            response.raise_for_status()
+            
+            result = response.json()
+            translated_text = result.get('response', '').strip()
+            
+            # Clean up the response to remove any potential explanations
+            # Remove common patterns that might indicate explanations
+            patterns_to_remove = [
+                r'^Translation:\s*',
+                r'^Here\'s the translation:\s*',
+                r'\nNote:.*$',
+                r'\nExplanation:.*$',
+                r'\n\n.*$'  # Remove anything after double newline
+            ]
+            
+            for pattern in patterns_to_remove:
+                translated_text = re.sub(pattern, '', translated_text, flags=re.MULTILINE)
+            
+            if not translated_text:
+                raise Exception("No translation received from the API")
+            
+            return translated_text.strip()
+            
+        except requests.exceptions.ConnectionError:
+            raise Exception("Could not connect to Ollama. Please ensure the service is running.")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"API request failed: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Translation error: {str(e)}")
+
+    def change_model(self, model_name: str):
+        """Change the current translation model"""
+        self.current_model = model_name
+        self.statusBar().showMessage(f"Changed model to: {model_name}")
+
+    def edit_prompt(self):
+        """Open the prompt editor dialog"""
+        dialog = PromptEditorDialog(self.translation_prompt, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.translation_prompt = dialog.get_prompt()
+            self.statusBar().showMessage("Translation prompt updated", 3000)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
