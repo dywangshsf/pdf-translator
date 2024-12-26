@@ -8,6 +8,7 @@ import json
 import time
 from typing import List, Optional
 import re
+import threading
 
 class PDFGraphicsView(QGraphicsView):
     """Custom QGraphicsView for handling text selection"""
@@ -212,8 +213,29 @@ class PromptEditorDialog(QDialog):
 class PDFViewer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PDF Viewer with Text Selection")
-        self.setGeometry(100, 100, 1200, 800)
+        
+        # Get the screen size
+        screen = QApplication.primaryScreen().geometry()
+        
+        # Set window title
+        self.setWindowTitle("PDF Translator")
+        
+        # Set window size to screen size
+        self.setGeometry(0, 0, screen.width(), screen.height())
+        
+        # Create main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Create splitter
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_layout.addWidget(splitter)
+        
+        # Set initial splitter sizes (70% left, 30% right)
+        screen_width = screen.width()
+        splitter.setSizes([int(screen_width * 0.7), int(screen_width * 0.3)])
         
         # Add model management
         self.available_models = []
@@ -475,13 +497,23 @@ class PDFViewer(QMainWindow):
 
             self.available_models = models
             
-            # Try to set yi:latest as default model
-            preferred_model = "yi:latest"
+            # Try to set llama3.2:latest as default model
+            preferred_model = "llama3.2:latest"
             if preferred_model in models:
                 self.current_model = preferred_model
+                # Preload the model in a separate thread
+                self.statusBar().showMessage("Warming up the model...")
+                self.warmup_model()
             else:
-                # If preferred model not available, use the first available model
+                QMessageBox.warning(
+                    self,
+                    "Preferred Model Not Found",
+                    f"The preferred model '{preferred_model}' is not available.\n"
+                    f"Please install it using: ollama pull {preferred_model}\n\n"
+                    f"Using {models[0]} as fallback."
+                )
                 self.current_model = models[0]
+                self.warmup_model()
             
             self.statusBar().showMessage(f"Using model: {self.current_model}")
             
@@ -492,6 +524,39 @@ class PDFViewer(QMainWindow):
                 f"Could not connect to Ollama service: {str(e)}\n\n"
                 "Please ensure Ollama is installed and running."
             )
+
+    def warmup_model(self):
+        """Warm up the model with a simple translation task"""
+        try:
+            # Create a simple warmup request
+            url = "http://localhost:11434/api/generate"
+            warmup_text = "Hello, this is a warmup text."
+            
+            payload = {
+                "model": self.current_model,
+                "prompt": f"Translate to Chinese: {warmup_text}",
+                "stream": False,
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "top_k": 40
+            }
+            
+            # Make the request in a separate thread to not block the UI
+            def warmup_thread():
+                try:
+                    response = requests.post(url, json=payload)
+                    response.raise_for_status()
+                    self.statusBar().showMessage("Model warmup completed")
+                except Exception as e:
+                    self.statusBar().showMessage(f"Model warmup failed: {str(e)}")
+            
+            # Start warmup thread
+            thread = threading.Thread(target=warmup_thread)
+            thread.daemon = True  # Thread will exit when main program exits
+            thread.start()
+            
+        except Exception as e:
+            self.statusBar().showMessage(f"Model warmup failed: {str(e)}")
 
     def get_ollama_models(self) -> List[str]:
         """Get list of available Ollama models"""
@@ -509,9 +574,12 @@ class PDFViewer(QMainWindow):
 
     def create_toolbar(self):
         """Create the toolbar with various buttons"""
-        toolbar = QToolBar()  # Create a toolbar
-        toolbar.setMovable(False)  # Make toolbar non-movable
-        self.addToolBar(toolbar)  # Add toolbar to main window
+        toolbar = QToolBar()
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+        
+        # Adjust toolbar height
+        toolbar.setFixedHeight(40)  # Make toolbar slightly taller
         
         # Style for toolbar buttons
         button_style = """
@@ -874,7 +942,7 @@ class PDFViewer(QMainWindow):
                 QApplication.processEvents()
                 
                 # Small delay between blocks
-                time.sleep(0.5)
+                time.sleep(0.1)
             
             self.statusBar().showMessage("Translation completed")
         except Exception as e:
@@ -949,10 +1017,11 @@ class PDFViewer(QMainWindow):
         except Exception as e:
             raise Exception(f"Translation error: {str(e)}")
 
-    def change_model(self, model_name: str):
-        """Change the current translation model"""
+    def change_model(self, model_name):
+        """Handle model change and warm up the new model"""
         self.current_model = model_name
-        self.statusBar().showMessage(f"Changed model to: {model_name}")
+        self.statusBar().showMessage(f"Changing to model: {model_name}")
+        self.warmup_model()
 
     def edit_prompt(self):
         """Open the prompt editor dialog"""
