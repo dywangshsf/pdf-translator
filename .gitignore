@@ -37,3 +37,4 @@ wheels/
 .Trashes
 ehthumbs.db
 Thumbs.db
+icons/*.png

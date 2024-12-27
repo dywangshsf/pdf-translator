@@ -9,6 +9,8 @@ import time
 from typing import List, Optional
 import re
 import threading
+import os
+from PIL import Image, ImageDraw, ImageFont
 
 class PDFGraphicsView(QGraphicsView):
     """Custom QGraphicsView for handling text selection"""
@@ -214,6 +216,9 @@ class PDFViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # Set application icon
+        self.set_app_icon()
+        
         # Get the screen size
         screen = QApplication.primaryScreen().geometry()
         
@@ -280,7 +285,7 @@ class PDFViewer(QMainWindow):
         # Define target languages
         self.target_languages = {
             "简体中文": "zh-CN",
-            "繁體中文": "zh-TW",
+            "繁体中文": "zh-TW",
             "日本語": "ja",
             "한국어": "ko",
             "Español": "es",
@@ -701,7 +706,7 @@ class PDFViewer(QMainWindow):
                 # Remove soft hyphens and other special characters
                 cleaned_p = cleaned_p.replace('\u00AD', '')  # Remove soft hyphen
                 cleaned_p = cleaned_p.replace('ﬁ', 'fi')  # Replace ligature
-                cleaned_p = cleaned_p.replace('ﬂ', 'fl')  # Replace ligature
+                cleaned_p = cleaned_p.replace('��', 'fl')  # Replace ligature
                 cleaned_paragraphs.append(cleaned_p)  # Add cleaned paragraph
         
         # Join paragraphs with double newlines
@@ -1030,8 +1035,106 @@ class PDFViewer(QMainWindow):
             self.translation_prompt = dialog.get_prompt()
             self.statusBar().showMessage("Translation prompt updated", 3000)
 
+    def set_app_icon(self):
+        """Set the application icon for both window and dock"""
+        # Create the icons directory if it doesn't exist
+        if not os.path.exists('icons'):
+            os.makedirs('icons')
+        
+        # Create icon file if it doesn't exist
+        icon_path = 'icons/app_icon.png'
+        if not os.path.exists(icon_path):
+            self.create_default_icon(icon_path)
+        
+        # Set the window icon
+        icon = QIcon(icon_path)
+        self.setWindowIcon(icon)
+        
+        # Set dock icon for macOS
+        try:
+            # Import macOS specific modules
+            import AppKit
+            
+            # Set the dock icon
+            icon_path_abs = os.path.abspath(icon_path)
+            icon_image = AppKit.NSImage.alloc().initWithContentsOfFile_(icon_path_abs)
+            AppKit.NSApplication.sharedApplication().setApplicationIconImage_(icon_image)
+            
+        except ImportError:
+            # Not on macOS, skip dock icon setting
+            pass
+
+    def create_default_icon(self, icon_path):
+        """Create a default icon if none exists"""
+        # Create a simple icon using PIL
+        from PIL import Image, ImageDraw, ImageFont
+        
+        # Create a new image with a white background
+        img_size = (128, 128)
+        img = Image.new('RGBA', img_size, color=(255, 255, 255, 0))
+        draw = ImageDraw.Draw(img)
+        
+        # Draw a rounded rectangle
+        radius = 10
+        draw.rounded_rectangle(
+            [(10, 10), (118, 118)],
+            radius=radius,
+            fill=(65, 105, 225),  # Royal Blue
+            outline=(47, 79, 79),  # Dark Slate Gray
+            width=2
+        )
+        
+        # Add "PDF" text
+        try:
+            # Try to use a system font
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 40)
+        except:
+            # Fallback to default font
+            font = ImageFont.load_default()
+        
+        # Draw "PDF" text
+        text = "PDF"
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        
+        x = (img_size[0] - text_width) // 2
+        y = (img_size[1] - text_height) // 2 - 10
+        
+        draw.text((x, y), text, fill=(255, 255, 255), font=font)
+        
+        # Add "Trans" text below
+        text = "Trans"
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        
+        x = (img_size[0] - text_width) // 2
+        y = y + text_height + 5
+        
+        draw.text((x, y), text, fill=(255, 255, 255), font=font)
+        
+        # Save the icon
+        img.save(icon_path, 'PNG')
+
 if __name__ == '__main__':
+    # Initialize application
     app = QApplication(sys.argv)
+    
+    # Set application name
+    app.setApplicationName("PDF Translator")
+    
+    # Create and show the viewer
     viewer = PDFViewer()
     viewer.show()
+    
+    # Set the dock icon for macOS
+    if os.path.exists('icons/app_icon.png'):
+        try:
+            import AppKit
+            icon_path = os.path.abspath('icons/app_icon.png')
+            icon_image = AppKit.NSImage.alloc().initWithContentsOfFile_(icon_path)
+            AppKit.NSApplication.sharedApplication().setApplicationIconImage_(icon_image)
+        except ImportError:
+            pass
+    
     sys.exit(app.exec()) 
