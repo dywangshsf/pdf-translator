@@ -1,0 +1,4 @@
+{"api_settings": {
+    "openai_api_key": "", 
+    "ollama_host": "http://localhost:11434"}
+}
