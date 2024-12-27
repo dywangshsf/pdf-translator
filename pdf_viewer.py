@@ -108,12 +108,7 @@ class PDFGraphicsView(QGraphicsView):
             text = block[4]  # Extract text from block
             y_pos = block[1]  # Y position of the block
             height = block[3] - block[1]  # Height of the block
-            
-            print(f"\nAnalyzing block {i+1}:")
-            print(f"Text: '{text}'")
-            print(f"Y position: {y_pos:.2f}")
-            print(f"Height: {height:.2f}")
-            
+           
             # Remove hyphenation
             if text.rstrip('-') != text:
                 print("Found hyphenation, removing...")
@@ -126,21 +121,11 @@ class PDFGraphicsView(QGraphicsView):
                 y_diff = abs(y_pos - last_y)  # Calculate distance from last block
                 height_ratio = height / last_height if last_height else 1.0  # Calculate height ratio
                 
-                print(f"Distance from last block: {y_diff:.2f}")
-                print(f"Height ratio: {height_ratio:.2f}")
-                
                 # Check if this might be a title or new paragraph
                 is_new_section = (y_diff > line_spacing_threshold * 2.0 or
                                 height_ratio > 1.2 or
                                 text.strip().endswith(':') or
                                 text.isupper())
-                
-                print("Checks for new section:")
-                print(f"- Large spacing (>{line_spacing_threshold * 2.0}): {y_diff > line_spacing_threshold * 2.0}")
-                print(f"- Larger height (>1.2): {height_ratio > 1.2}")
-                print(f"- Ends with colon: {text.strip().endswith(':')}")
-                print(f"- All caps: {text.isupper()}")
-                print(f"Is new section: {is_new_section}")
                 
                 if is_new_section:
                     print("=> Starting new section with extra spacing")
@@ -389,9 +374,6 @@ class PDFViewer(QMainWindow):
         self.settings_button = QPushButton("Settings", self)  # Button for settings
         self.settings_button.clicked.connect(self.open_settings)  # Connect to settings function
 
-        # Set the layout for the main widget
-        self.setLayout(layout)
-
         # Create toolbar after initializing translate button
         self.create_toolbar()  # Ensure this is called after translate_button is defined
 
@@ -496,6 +478,13 @@ class PDFViewer(QMainWindow):
         self.fit_btn.clicked.connect(self.fit_width)  # Connect to fit width function
         self.fit_btn.setEnabled(False)  # Initially disabled
         toolbar.addWidget(self.fit_btn)  # Add to toolbar
+
+        # Add after the existing Fit button
+        self.fit_height_btn = QPushButton("Fit Height")
+        self.fit_height_btn.setObjectName("QPushButton")
+        self.fit_height_btn.clicked.connect(self.fit_to_height)
+        self.fit_height_btn.setEnabled(False)  # Disabled until PDF is loaded
+        toolbar.addWidget(self.fit_height_btn)
         
         toolbar.addSeparator()  # Add separator
         
@@ -527,6 +516,7 @@ class PDFViewer(QMainWindow):
         self.zoom_in_btn.setEnabled(has_doc)  # Enable zoom in button if applicable
         self.zoom_out_btn.setEnabled(has_doc)  # Enable zoom out button if applicable
         self.fit_btn.setEnabled(has_doc)  # Enable fit width button if applicable
+        self.fit_height_btn.setEnabled(has_doc)  # Enable fit height button if applicable
 
     def update_selected_text(self, text):
         """Update the text panel with selected text"""
@@ -1143,6 +1133,37 @@ class PDFViewer(QMainWindow):
             self.progress_bar.setRange(0, 0)  # Makes the progress bar indeterminate
         else:
             self.progress_bar.setRange(0, 100)  # Restore normal range
+
+    def fit_to_height(self):
+        """Fit the PDF page to the window height"""
+        if not hasattr(self, 'current_page') or not self.current_page:
+            return
+        
+        # Get the view's viewport height with some padding
+        viewport_height = self.pdf_view.viewport().height() - 20  # 10px padding on each side
+        
+        # Get the current page as QImage
+        page_image = self.current_page.toImage()
+        if not page_image:
+            return
+        
+        # Calculate the scale factor needed to fit the height
+        image_height = page_image.height()
+        if image_height <= 0:
+            return
+        
+        scale_factor = viewport_height / image_height
+        
+        # Apply the scaling
+        self.pdf_view.resetTransform()
+        self.pdf_view.scale(scale_factor, scale_factor)
+        
+        # Update zoom level and status
+        self.current_zoom = scale_factor * 100
+        self.statusBar().showMessage(f"Zoom: {self.current_zoom:.0f}%")
+        
+        # Center the content horizontally
+        self.pdf_view.centerOn(self.pdf_view.scene().sceneRect().center())
 
 class APISettingsDialog(QDialog):
     def __init__(self, current_settings, parent=None):
