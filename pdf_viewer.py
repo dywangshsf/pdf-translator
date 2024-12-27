@@ -11,6 +11,7 @@ import re
 import threading
 import os
 from PIL import Image, ImageDraw, ImageFont
+import openai  # Add this import at the top
 
 class PDFGraphicsView(QGraphicsView):
     """Custom QGraphicsView for handling text selection"""
@@ -216,6 +217,39 @@ class PDFViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # Initialize current source and model
+        self.current_source = "Ollama"  # Default source
+        self.current_model = None
+        
+        # Add light theme styling at the start of initialization
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #ffffff;
+                color: #000000;
+            }
+            QWidget {
+                background-color: #ffffff;
+                color: #000000;
+            }
+            QTextEdit {
+                background-color: #ffffff;
+                color: #000000;
+                border: 1px solid #cccccc;
+                border-radius: 3px;
+            }
+            QComboBox {
+                background-color: #ffffff;
+                color: #000000;
+                border: 1px solid #cccccc;
+            }
+            QLabel {
+                color: #000000;
+            }
+            QGraphicsView {
+                background-color: #ffffff;
+            }
+        """)
+        
         # Set application icon
         self.set_app_icon()
         
@@ -323,14 +357,33 @@ class PDFViewer(QMainWindow):
         """)
         right_layout.addWidget(self.text_edit)
         
-        # Create horizontal layout for controls
+        # Create controls layout
         controls_layout = QHBoxLayout()
         controls_layout.setSpacing(8)  # Space between controls
         
+        # Model source selection combo box
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(["Ollama", "OpenAI"])
+        self.source_combo.setCurrentText(self.current_source)  # Set default source
+        self.source_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 3px;
+                min-width: 90px;
+                max-width: 90px;
+                min-height: 24px;
+            }
+        """)
+        # Explicitly disconnect any existing connections
+        self.source_combo.currentTextChanged.disconnect() if self.source_combo.receivers(self.source_combo.currentTextChanged) > 0 else None
+        
+        # Connect the signal
+        self.source_combo.currentTextChanged.connect(self.on_source_changed)
+        controls_layout.addWidget(self.source_combo)
+        
         # Model selection combo box
         self.model_combo = QComboBox()
-        self.model_combo.addItems(self.available_models)
-        self.model_combo.setCurrentText(self.current_model)
         self.model_combo.setStyleSheet("""
             QComboBox {
                 border: 1px solid #ccc;
@@ -388,8 +441,28 @@ class PDFViewer(QMainWindow):
         self.translate_button.clicked.connect(self.translate_selected_text)
         controls_layout.addWidget(self.translate_button)
         
+        # Add API settings button
+        self.api_settings_btn = QPushButton("🔑")
+        self.api_settings_btn.setToolTip("API Settings")
+        self.api_settings_btn.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 3px;
+                min-width: 24px;
+                max-width: 24px;
+                min-height: 24px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #f0f0f0;
+            }
+        """)
+        self.api_settings_btn.clicked.connect(self.show_api_settings)
+        controls_layout.addWidget(self.api_settings_btn)
+        
         # Add prompt editor button
-        self.prompt_button = QPushButton("📝")  # Using emoji as icon
+        self.prompt_button = QPushButton("📝")
         self.prompt_button.setToolTip("Edit Translation Prompt")
         self.prompt_button.setStyleSheet("""
             QPushButton {
@@ -408,8 +481,11 @@ class PDFViewer(QMainWindow):
         self.prompt_button.clicked.connect(self.edit_prompt)
         controls_layout.addWidget(self.prompt_button)
         
-        # Add controls layout to main layout
+        # Add controls layout to right_layout
         right_layout.addLayout(controls_layout)
+        
+        # Initialize the model list
+        self.update_model_list(self.source_combo.currentText())
         
         # Translation output section
         self.translated_label = QLabel("Translation:")
@@ -485,6 +561,17 @@ class PDFViewer(QMainWindow):
             "{target_lang} sentence by sentence. Keep the original structure and "
             "meaning. Output the translation only, don't output any explanation text:\n\n{text}"
         )
+
+        # Initialize API settings
+        self.load_api_settings()
+        
+        # Modify model management
+        self.model_sources = {
+            "Ollama": self.get_ollama_models(),
+            "OpenAI": ["gpt-4", "gpt-3.5-turbo"]
+        }
+
+        self.text_edit.textChanged.connect(self.on_text_changed)
 
     def initialize_models(self):
         """Initialize and verify Ollama models"""
@@ -886,7 +973,7 @@ class PDFViewer(QMainWindow):
             f.write(f"Original: {original_text}\nTranslated: {translated_text} ({language})\n\n")
 
     def translate_selected_text(self):
-        """Translate the selected text into Chinese using Ollama"""
+        """Translate the selected text"""
         if not self.current_model:
             QMessageBox.warning(
                 self,
@@ -897,7 +984,7 @@ class PDFViewer(QMainWindow):
 
         text = self.text_edit.toPlainText()
         
-        # Check if text is empty or None
+        # Check if text is empty
         if not text or text.isspace():
             QMessageBox.warning(
                 self,
@@ -905,70 +992,108 @@ class PDFViewer(QMainWindow):
                 "Please select some text to translate."
             )
             return
-            
+        
         try:
-            self.statusBar().showMessage("Translating...")
+            # Show translation is starting
+            self.statusBar().showMessage("Starting translation...")
             self.translate_button.setEnabled(False)
-            self.translate_button.setText("...")
+            self.translate_button.setText("Translating...")
+            QApplication.processEvents()  # Force UI update
             
-            # Split text into blocks (paragraphs)
-            blocks = [b for b in text.split('\n\n') if b.strip()]
-            total_blocks = len(blocks)
+            # Get current source from source_combo, not stored value
+            current_source = self.source_combo.currentText()
+            print(f"Current source: {current_source}")  # Debug print
+            print(f"Current model: {self.current_model}")  # Debug print
             
-            # Show and reset progress bar
-            self.progress_bar.setMaximum(total_blocks)
-            self.progress_bar.setValue(0)
-            self.progress_bar.show()
+            # Perform translation based on source
+            if current_source == "OpenAI":
+                print("Using OpenAI translation")  # Debug print
+                translated_text = self.translate_with_openai(text)
+            else:
+                print("Using Ollama translation")  # Debug print
+                translated_text = self.translate_with_ollama(text)
             
-            # Clear translation area
-            self.translated_text.clear()
+            if translated_text:
+                self.translated_text.setPlainText(translated_text)
+                self.statusBar().showMessage("Translation completed: {}".format(current_source))
+            else:
+                raise Exception("No translation result received")
             
-            # Create cursor for appending text
-            cursor = self.translated_text.textCursor()
-            cursor.movePosition(cursor.MoveOperation.End)
-            
-            for i, block in enumerate(blocks, 1):
-                # Update progress bar and status
-                self.progress_bar.setValue(i)
-                self.statusBar().showMessage(f"Translating block {i} of {total_blocks}")
-                
-                # Translate block
-                translated_block = self.translate_text(block.strip())
-                
-                # Append the translated block
-                if i > 1:  # Add newlines before blocks after the first one
-                    cursor.insertText("\n\n")
-                cursor.insertText(translated_block)
-                
-                # Scroll to the bottom
-                self.translated_text.setTextCursor(cursor)
-                self.translated_text.ensureCursorVisible()
-                
-                # Process events to keep UI responsive
-                QApplication.processEvents()
-                
-                # Small delay between blocks
-                time.sleep(0.1)
-            
-            self.statusBar().showMessage("Translation completed")
         except Exception as e:
-            self.statusBar().showMessage(f"Translation error: {str(e)}")
-            self.translated_text.setPlainText(f"Translation failed: {str(e)}")
+            error_msg = str(e)
+            print(f"Translation error: {error_msg}")  # Debug print
+            QMessageBox.critical(
+                self,
+                "Translation Error",
+                f"An error occurred during translation:\n{error_msg}"
+            )
+            self.statusBar().showMessage(f"Translation failed: {error_msg}")
+        
         finally:
+            # Reset button state
             self.translate_button.setEnabled(True)
-            self.translate_button.setText("Translate")  # Reset to English text
-            self.progress_bar.hide()
+            self.translate_button.setText("Translate")
+            QApplication.processEvents()
 
-    def translate_text(self, text: str) -> str:
-        """Translate text using selected Ollama model"""
-        if not self.current_model:
-            raise Exception("No translation model selected")
+    def translate_with_openai(self, text: str) -> str:
+        """Translate text using OpenAI API"""
+        print("Starting OpenAI translation...")  # Debug print
+        
+        if not self.api_settings.get('openai_api_key'):
+            raise Exception("OpenAI API key not configured. Please set it in API Settings (🔑)")
 
         try:
-            url = "http://localhost:11434/api/generate"
-            
-            # Use the customizable prompt
+            client = openai.OpenAI(api_key=self.api_settings['openai_api_key'])
             target_lang = self.language_combo.currentText()
+            
+            print(f"Using OpenAI model: {self.current_model}")  # Debug print
+            print(f"Target language: {target_lang}")  # Debug print
+            
+            response = client.chat.completions.create(
+                model=self.current_model,
+                messages=[
+                    {"role": "system", "content": "You are a professional translator."},
+                    {"role": "user", "content": f"Translate the following text to {target_lang}. Output ONLY the translation:\n\n{text}"}
+                ],
+                temperature=0.3,
+                max_tokens=2000
+            )
+            
+            translated_text = response.choices[0].message.content.strip()
+            print("OpenAI translation completed successfully")  # Debug print
+            return translated_text
+            
+        except openai.AuthenticationError:
+            raise Exception("Invalid OpenAI API key. Please check your API key in Settings.")
+        except openai.RateLimitError:
+            raise Exception("OpenAI API rate limit exceeded. Please try again later.")
+        except Exception as e:
+            print(f"OpenAI translation error: {str(e)}")  # Debug print
+            raise
+
+    def translate_with_ollama(self, text: str) -> str:
+        """Translate text using Ollama API"""
+        try:
+            print("Starting Ollama translation...")  # Debug print
+            print(f"Ollama host: {self.api_settings['ollama_host']}")  # Debug print
+            print(f"Current model: {self.current_model}")  # Debug print
+            
+            # First check if Ollama is running
+            try:
+                health_check = requests.get(self.api_settings['ollama_host'])
+                health_check.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                print(f"Ollama health check failed: {e}")  # Debug print
+                raise Exception(
+                    "Could not connect to Ollama. Please ensure:\n"
+                    "1. Ollama is installed\n"
+                    "2. Ollama service is running (run 'ollama serve')\n"
+                    "3. The host setting is correct"
+                )
+
+            url = f"{self.api_settings['ollama_host']}/api/generate"
+            target_lang = self.language_combo.currentText()
+            
             prompt = (
                 f"You are a professional translator. Translate the following text to "
                 f"{target_lang}. Output ONLY the translation, without any explanations, "
@@ -984,50 +1109,45 @@ class PDFViewer(QMainWindow):
                 "top_k": 40
             }
             
-            response = requests.post(url, json=payload)
-            response.raise_for_status()
+            print("Sending request to Ollama...")  # Debug print
+            #print(f"Payload: {payload}")  # Debug print
             
+            response = requests.post(url, json=payload, timeout=30)  # Added timeout
+            #print(f"Response status code: {response.status_code}")  # Debug print
+            
+            if response.status_code != 200:
+                print(f"Error response: {response.text}")  # Debug print
+                raise Exception(f"Ollama API error: {response.text}")
+                
             result = response.json()
+            #print(f"Response received: {result}")  # Debug print
+            
             translated_text = result.get('response', '').strip()
             
-            # Clean up the response to remove special tokens and markers
-            patterns_to_remove = [
-                r'<\|next_token\|>',
-                r'<\|im_start\|>',
-                r'<\|im_end\|>',
-                r'<\|end\|>',
-                r'\| 翻译 \|',
-                r'^Translation:\s*',
-                r'^这是.*翻译.*$',
-                r'^Here\'s the translation:\s*',
-                r'\nNote:.*$',
-                r'\nExplanation:.*$'
-            ]
-            
-            for pattern in patterns_to_remove:
-                translated_text = re.sub(pattern, '', translated_text, flags=re.MULTILINE | re.IGNORECASE)
-            
-            # Remove any lines that are just whitespace or empty
-            lines = [line.strip() for line in translated_text.split('\n') if line.strip()]
-            translated_text = '\n'.join(lines)
-            
             if not translated_text:
-                raise Exception("No translation received from the API")
+                raise Exception("Empty response from Ollama")
             
-            return translated_text.strip()
+            print("Ollama translation completed successfully")  # Debug print
+            return translated_text
             
+        except requests.exceptions.Timeout:
+            raise Exception("Translation request timed out. Please try again.")
         except requests.exceptions.ConnectionError:
-            raise Exception("Could not connect to Ollama. Please ensure the service is running.")
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"API request failed: {str(e)}")
+            raise Exception(
+                f"Could not connect to Ollama at {self.api_settings['ollama_host']}\n"
+                "Please ensure:\n"
+                "1. Ollama is installed\n"
+                "2. Ollama service is running (run 'ollama serve')\n"
+                "3. The host setting is correct"
+            )
         except Exception as e:
-            raise Exception(f"Translation error: {str(e)}")
+            print(f"Ollama translation error: {str(e)}")  # Debug print
+            raise
 
     def change_model(self, model_name):
-        """Handle model change and warm up the new model"""
+        """Handle model change"""
         self.current_model = model_name
-        self.statusBar().showMessage(f"Changing to model: {model_name}")
-        self.warmup_model()
+        self.statusBar().showMessage(f"Changed to model: {model_name}")
 
     def edit_prompt(self):
         """Open the prompt editor dialog"""
@@ -1096,7 +1216,7 @@ class PDFViewer(QMainWindow):
         # Draw "PDF" text
         text = "PDF"
         text_bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
+        text_width = text_bbox[2] - text_bbox[0]        
         text_height = text_bbox[3] - text_bbox[1]
         
         x = (img_size[0] - text_width) // 2
@@ -1116,6 +1236,204 @@ class PDFViewer(QMainWindow):
         
         # Save the icon
         img.save(icon_path, 'PNG')
+
+    def load_api_settings(self):
+        """Load API settings from config file and environment variables"""
+        try:
+            # Try to load from config file first
+            with open('config.json', 'r') as f:
+                config = json.load(f)
+                self.api_settings = config.get('api_settings', {})
+        except FileNotFoundError:
+            self.api_settings = {}
+
+        # Set default values if not present
+        if 'ollama_host' not in self.api_settings:
+            self.api_settings['ollama_host'] = 'http://localhost:11434'
+
+        # Try to get OpenAI API key from environment variable
+        openai_key_from_env = os.getenv('OPENAI_API_KEY')
+        if openai_key_from_env:
+            self.api_settings['openai_api_key'] = openai_key_from_env
+        elif 'openai_api_key' not in self.api_settings:
+            self.api_settings['openai_api_key'] = ''
+
+        print(f"OpenAI API key loaded: {'Yes' if self.api_settings.get('openai_api_key') else 'No'}")
+
+    def save_api_settings(self):
+        """Save API settings to config file"""
+        config = {'api_settings': self.api_settings}
+        with open('config.json', 'w') as f:
+            json.dump(config, f)
+
+    def show_api_settings(self):
+        """Show API settings dialog"""
+        dialog = APISettingsDialog(self.api_settings, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.api_settings = dialog.get_settings()
+            self.save_api_settings()
+            # Refresh model lists
+            self.model_sources["Ollama"] = self.get_ollama_models()
+            self.update_model_list(self.source_combo.currentText())
+
+    def update_model_list(self, source):
+        """Update model list based on selected source"""
+        print(f"Updating model list for source: {source}")  # Debug print
+        self.model_combo.clear()
+        
+        if source == "Ollama":
+            models = self.get_ollama_models()
+            default_model = "llama2-uncensored:latest"
+            if default_model not in models and models:
+                default_model = models[0]
+        elif source == "OpenAI":
+            models = ["gpt-3.5-turbo", "gpt-4"]
+            default_model = "gpt-3.5-turbo"
+        else:
+            models = []
+            default_model = None
+            print(f"Unknown source: {source}")  # Debug print
+        
+        self.model_combo.addItems(models)
+        
+        # Set the default model
+        if default_model and default_model in models:
+            index = self.model_combo.findText(default_model)
+            if index >= 0:
+                self.model_combo.setCurrentIndex(index)
+                self.current_model = default_model
+                print(f"Selected default model: {self.current_model}")  # Debug print
+        elif self.model_combo.count() > 0:
+            self.model_combo.setCurrentIndex(0)
+            self.current_model = self.model_combo.currentText()
+            print(f"Selected first available model: {self.current_model}")  # Debug print
+
+    def on_source_changed(self, new_source):
+        """Handle source change event"""
+        print(f"Source changed to: {new_source}")  # Debug print
+        self.current_source = new_source
+        self.update_model_list(new_source)
+        
+        # Update cost estimate if OpenAI is selected
+        if new_source == "OpenAI":
+            self.update_cost_estimate()
+            # Check for API key
+            if not self.api_settings.get('openai_api_key'):
+                QMessageBox.warning(
+                    self,
+                    "OpenAI API Key Required",
+                    "Please configure your OpenAI API key in Settings (🔑)"
+                )
+        else:
+            self.statusBar().showMessage(f"Changed to {new_source} models")
+
+    def update_cost_estimate(self):
+        """Update the cost estimate in the status bar"""
+        text = self.text_edit.toPlainText()
+        if text and self.current_source == "OpenAI":
+            estimated_cost = self.estimate_cost(text)
+            self.statusBar().showMessage(f"Estimated cost: ${estimated_cost:.4f} USD")
+        else:
+            self.statusBar().showMessage("")
+
+    def text_selection_changed(self):
+        """Handle text selection changes"""
+        selected_text = self.pdf_view.selectedText()
+        if selected_text:
+            self.text_edit.setPlainText(selected_text)
+            # Update cost estimate if OpenAI is selected
+            if self.current_source == "OpenAI":
+                self.update_cost_estimate()
+
+    def on_text_changed(self):
+        """Handle text changes in the text edit"""
+        if self.current_source == "OpenAI":
+            self.update_cost_estimate()
+
+    def estimate_tokens(self, text: str) -> int:
+        """Rough estimate of tokens in text (about 4 chars per token)"""
+        return len(text) // 4
+
+    def estimate_cost(self, text: str) -> float:
+        """Estimate cost of translation in USD"""
+        tokens = self.estimate_tokens(text)
+        model = self.current_model
+        
+        # Pricing per 1K tokens (as of March 2024)
+        prices = {
+            "gpt-4": {"input": 0.03, "output": 0.06},
+            "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015}
+        }
+        
+        if model.startswith("gpt-4"):
+            price = prices["gpt-4"]
+        else:
+            price = prices["gpt-3.5-turbo"]
+        
+        # Estimate cost (assuming output is similar length to input)
+        cost = (tokens * price["input"] + tokens * price["output"]) / 1000
+        return cost
+
+class APISettingsDialog(QDialog):
+    def __init__(self, current_settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("API Settings")
+        self.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(self)
+        
+        # OpenAI API Key
+        api_key_layout = QHBoxLayout()
+        api_key_label = QLabel("OpenAI API Key:")
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setText(current_settings.get('openai_api_key', ''))
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        api_key_layout.addWidget(api_key_label)
+        api_key_layout.addWidget(self.api_key_input)
+        layout.addLayout(api_key_layout)
+        
+        # Ollama Host
+        ollama_layout = QHBoxLayout()
+        ollama_label = QLabel("Ollama Host:")
+        self.ollama_input = QLineEdit()
+        self.ollama_input.setText(current_settings.get('ollama_host', 'http://localhost:11434'))
+        ollama_layout.addWidget(ollama_label)
+        ollama_layout.addWidget(self.ollama_input)
+        layout.addLayout(ollama_layout)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | 
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+        
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+            }
+            QLabel {
+                font-size: 11px;
+                min-width: 100px;
+            }
+            QLineEdit {
+                padding: 5px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+            }
+            QPushButton {
+                padding: 5px 15px;
+            }
+        """)
+
+    def get_settings(self):
+        """Return the current settings"""
+        return {
+            'openai_api_key': self.api_key_input.text(),
+            'ollama_host': self.ollama_input.text()
+        }
 
 if __name__ == '__main__':
     # Initialize application
