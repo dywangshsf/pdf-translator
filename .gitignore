@@ -45,3 +45,4 @@ dist/
 venv/
 *.pyc
 build_log.txt
+config.json

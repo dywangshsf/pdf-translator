@@ -1062,9 +1062,6 @@ class PDFViewer(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.api_settings = dialog.get_settings()
             self.save_api_settings()
-            # Refresh model lists
-            self.model_sources["Ollama"]["models"] = self.get_ollama_models()
-            self.update_model_list(self.source_combo.currentText())
 
     def on_source_changed(self, new_source):
         """Handle source change event"""
