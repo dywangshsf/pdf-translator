@@ -217,39 +217,23 @@ class PDFViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Initialize current source and model
-        self.current_source = "Ollama"  # Default source
-        self.current_model = None
+        # Initialize API settings
+        self.load_api_settings()
         
-        # Add light theme styling at the start of initialization
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #ffffff;
-                color: #000000;
-            }
-            QWidget {
-                background-color: #ffffff;
-                color: #000000;
-            }
-            QTextEdit {
-                background-color: #ffffff;
-                color: #000000;
-                border: 1px solid #cccccc;
-                border-radius: 3px;
-            }
-            QComboBox {
-                background-color: #ffffff;
-                color: #000000;
-                border: 1px solid #cccccc;
-            }
-            QLabel {
-                color: #000000;
-            }
-            QGraphicsView {
-                background-color: #ffffff;
-            }
-        """)
-        
+        # Load stylesheet
+        self.load_stylesheet()
+
+        # Modify model management
+        self.model_sources = {
+            "Ollama": {
+                "models": self.get_ollama_models()
+                },
+            "OpenAI": {
+                "models": ["gpt-3.5-turbo", "gpt-4"]
+            },
+        }
+        self.default_source = "OpenAI"
+
         # Set application icon
         self.set_app_icon()
         
@@ -271,18 +255,7 @@ class PDFViewer(QMainWindow):
         # Create splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
-        
-        # Set initial splitter sizes (70% left, 30% right)
-        screen_width = screen.width()
-        splitter.setSizes([int(screen_width * 0.7), int(screen_width * 0.3)])
-        
-        # Add model management
-        self.available_models = []
-        self.current_model = None
-        
-        # Initialize models before setting up UI
-        self.initialize_models()
-        
+               
         # Create central widget and layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -313,6 +286,9 @@ class PDFViewer(QMainWindow):
         self.pdf_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.pdf_view.setScene(self.scene)  # Set the scene for the PDF view
         
+        # Connect text selection signal
+        self.pdf_view.textSelected.connect(self.update_selected_text)  # Update text when selected
+
         left_layout.addWidget(self.pdf_view)  # Add PDF view to layout
         splitter.addWidget(left_widget)  # Add left widget to splitter
         
@@ -326,6 +302,7 @@ class PDFViewer(QMainWindow):
             "Français": "fr",
             "Deutsch": "de"
         }
+        self.target_languages_default = "简体中文"
 
         # Right side panel layout
         right_widget = QWidget()
@@ -335,26 +312,11 @@ class PDFViewer(QMainWindow):
         
         # Selected text section
         self.text_label = QLabel("Selected Text:")
-        self.text_label.setStyleSheet("""
-            QLabel {
-                font-weight: bold;
-                font-size: 11px;
-                color: #333;
-            }
-        """)
         right_layout.addWidget(self.text_label)
         
         self.text_edit = QTextEdit()
-        self.text_edit.setReadOnly(True)
-        self.text_edit.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                padding: 4px;
-                background-color: #ffffff;
-                min-height: 100px;
-            }
-        """)
+        #self.text_edit.setReadOnly(True)
+        self.text_edit.textChanged.connect(self.on_text_changed)
         right_layout.addWidget(self.text_edit)
         
         # Create controls layout
@@ -363,80 +325,26 @@ class PDFViewer(QMainWindow):
         
         # Model source selection combo box
         self.source_combo = QComboBox()
-        self.source_combo.addItems(["Ollama", "OpenAI"])
-        self.source_combo.setCurrentText(self.current_source)  # Set default source
-        self.source_combo.setStyleSheet("""
-            QComboBox {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                padding: 3px;
-                min-width: 90px;
-                max-width: 90px;
-                min-height: 24px;
-            }
-        """)
-        # Explicitly disconnect any existing connections
-        self.source_combo.currentTextChanged.disconnect() if self.source_combo.receivers(self.source_combo.currentTextChanged) > 0 else None
-        
-        # Connect the signal
+        self.source_combo.addItems(self.model_sources.keys())
+        self.source_combo.setCurrentText(self.default_source)  # Set default source
         self.source_combo.currentTextChanged.connect(self.on_source_changed)
         controls_layout.addWidget(self.source_combo)
         
         # Model selection combo box
         self.model_combo = QComboBox()
-        self.model_combo.setStyleSheet("""
-            QComboBox {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                padding: 3px;
-                min-width: 120px;
-                max-width: 120px;
-                min-height: 24px;
-            }
-        """)
+        self.model_combo.addItems(self.get_available_models(self.default_source))
         self.model_combo.currentTextChanged.connect(self.change_model)
         controls_layout.addWidget(self.model_combo)
         
         # Target language combo box
         self.language_combo = QComboBox()
         self.language_combo.addItems(self.target_languages.keys())
-        self.language_combo.setCurrentText("简体中文")  # Set default to Simplified Chinese
-        self.language_combo.setStyleSheet("""
-            QComboBox {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                padding: 3px;
-                min-width: 90px;
-                max-width: 90px;
-                min-height: 24px;
-            }
-        """)
+        self.language_combo.setCurrentText(self.target_languages_default)  # Set default to Simplified Chinese
         controls_layout.addWidget(self.language_combo)
         
         # Translate button
         self.translate_button = QPushButton("Translate")
-        self.translate_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                padding: 4px 12px;
-                border: none;
-                border-radius: 3px;
-                font-weight: bold;
-                min-height: 24px;
-                min-width: 60px;
-                max-width: 60px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:pressed {
-                background-color: #3d8b40;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-            }
-        """)
+        self.translate_button.setObjectName("translate_button")
         self.translate_button.setToolTip("Translate text")
         self.translate_button.clicked.connect(self.translate_selected_text)
         controls_layout.addWidget(self.translate_button)
@@ -444,87 +352,28 @@ class PDFViewer(QMainWindow):
         # Add API settings button
         self.api_settings_btn = QPushButton("🔑")
         self.api_settings_btn.setToolTip("API Settings")
-        self.api_settings_btn.setStyleSheet("""
-            QPushButton {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                padding: 3px;
-                min-width: 24px;
-                max-width: 24px;
-                min-height: 24px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #f0f0f0;
-            }
-        """)
         self.api_settings_btn.clicked.connect(self.show_api_settings)
         controls_layout.addWidget(self.api_settings_btn)
         
         # Add prompt editor button
         self.prompt_button = QPushButton("📝")
         self.prompt_button.setToolTip("Edit Translation Prompt")
-        self.prompt_button.setStyleSheet("""
-            QPushButton {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                padding: 3px;
-                min-width: 24px;
-                max-width: 24px;
-                min-height: 24px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #f0f0f0;
-            }
-        """)
         self.prompt_button.clicked.connect(self.edit_prompt)
         controls_layout.addWidget(self.prompt_button)
         
         # Add controls layout to right_layout
         right_layout.addLayout(controls_layout)
         
-        # Initialize the model list
-        self.update_model_list(self.source_combo.currentText())
-        
         # Translation output section
         self.translated_label = QLabel("Translation:")
-        self.translated_label.setStyleSheet("""
-            QLabel {
-                font-weight: bold;
-                font-size: 11px;
-                color: #333;
-                padding: 2px 0;
-            }
-        """)
         right_layout.addWidget(self.translated_label)
         
         self.translated_text = QTextEdit()
         self.translated_text.setReadOnly(True)
-        self.translated_text.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #ddd;
-                border-radius: 3px;
-                padding: 4px;
-                background-color: #f5f5f5;
-                min-height: 100px;
-            }
-        """)
         right_layout.addWidget(self.translated_text)
         
         # Add progress bar (initially hidden)
         self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                text-align: center;
-                height: 24px;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-            }
-        """)
         self.progress_bar.hide()  # Hide initially
         right_layout.addWidget(self.progress_bar)
         
@@ -532,11 +381,10 @@ class PDFViewer(QMainWindow):
         right_layout.insertWidget(right_layout.indexOf(self.translated_label), self.progress_bar)
         
         splitter.addWidget(right_widget)
-        splitter.setSizes([750, 250])
-        
-        # Connect text selection signal
-        self.pdf_view.textSelected.connect(self.update_selected_text)  # Update text when selected
-        
+        # Set initial splitter sizes (70% left, 30% right)
+        screen_width = screen.width()
+        splitter.setSizes([int(screen_width * 0.7), int(screen_width * 0.3)])
+                
         # Add a settings button
         self.settings_button = QPushButton("Settings", self)  # Button for settings
         self.settings_button.clicked.connect(self.open_settings)  # Connect to settings function
@@ -562,94 +410,26 @@ class PDFViewer(QMainWindow):
             "meaning. Output the translation only, don't output any explanation text:\n\n{text}"
         )
 
-        # Initialize API settings
-        self.load_api_settings()
-        
-        # Modify model management
-        self.model_sources = {
-            "Ollama": self.get_ollama_models(),
-            "OpenAI": ["gpt-4", "gpt-3.5-turbo"]
-        }
-
-        self.text_edit.textChanged.connect(self.on_text_changed)
-
-    def initialize_models(self):
-        """Initialize and verify Ollama models"""
+    def get_available_models(self, source=None):
+        if source is None:
+            source = self.default_source
+        return self.model_sources[source]["models"]
+    
+    def load_stylesheet(self):
+        """Load the application stylesheet from file"""
         try:
-            # Get available models from Ollama
-            models = self.get_ollama_models()
-            
-            if not models:
-                QMessageBox.warning(
-                    self,
-                    "No Models Found",
-                    "No Ollama models found. Please install at least one model using 'ollama pull <model>'"
-                )
-                return
-
-            self.available_models = models
-            
-            # Try to set llama3.2:latest as default model
-            preferred_model = "llama3.2:latest"
-            if preferred_model in models:
-                self.current_model = preferred_model
-                # Preload the model in a separate thread
-                self.statusBar().showMessage("Warming up the model...")
-                self.warmup_model()
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Preferred Model Not Found",
-                    f"The preferred model '{preferred_model}' is not available.\n"
-                    f"Please install it using: ollama pull {preferred_model}\n\n"
-                    f"Using {models[0]} as fallback."
-                )
-                self.current_model = models[0]
-                self.warmup_model()
-            
-            self.statusBar().showMessage(f"Using model: {self.current_model}")
-            
+            with open('styles.css', 'r') as f:
+                stylesheet = f.read()
+                self.setStyleSheet(stylesheet)
+                
+                # Set object names for specific styling
+                if hasattr(self, 'translate_button'):
+                    self.translate_button.setObjectName('translate_button')
+                    
+        except FileNotFoundError:
+            print("Warning: styles.qss not found")
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Ollama Connection Error",
-                f"Could not connect to Ollama service: {str(e)}\n\n"
-                "Please ensure Ollama is installed and running."
-                "Follow: https://ollama.com/download"
-            )
-
-    def warmup_model(self):
-        """Warm up the model with a simple translation task"""
-        try:
-            # Create a simple warmup request
-            url = "http://localhost:11434/api/generate"
-            warmup_text = "Hello, this is a warmup text."
-            
-            payload = {
-                "model": self.current_model,
-                "prompt": f"Translate to Chinese: {warmup_text}",
-                "stream": False,
-                "temperature": 0.1,
-                "top_p": 0.9,
-                "top_k": 40
-            }
-            
-            # Make the request in a separate thread to not block the UI
-            def warmup_thread():
-                try:
-                    response = requests.post(url, json=payload)
-                    response.raise_for_status()
-                    self.statusBar().showMessage("Model warmup completed")
-                except Exception as e:
-                    self.statusBar().showMessage(f"Model warmup failed: {str(e)}")
-            
-            # Start warmup thread
-            thread = threading.Thread(target=warmup_thread)
-            thread.daemon = True  # Thread will exit when main program exits
-            thread.start()
-            
-        except Exception as e:
-            self.statusBar().showMessage(f"Model warmup failed: {str(e)}")
+            print(f"Error loading stylesheet: {str(e)}")
 
     def get_ollama_models(self) -> List[str]:
         """Get list of available Ollama models"""
@@ -674,69 +454,45 @@ class PDFViewer(QMainWindow):
         # Adjust toolbar height
         toolbar.setFixedHeight(40)  # Make toolbar slightly taller
         
-        # Style for toolbar buttons
-        button_style = """
-            QPushButton {
-                padding: 6px 12px;
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                background-color: #f8f9fa;
-                min-width: 80px;
-                margin: 0 2px;
-            }
-            QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #adb5bd;
-            }
-            QPushButton:pressed {
-                background-color: #dee2e6;
-            }
-            QPushButton:disabled {
-                background-color: #e9ecef;
-                color: #adb5bd;
-            }
-        """
-        
         # Add buttons to toolbar
         self.open_btn = QPushButton("Open PDF")  # Button to open PDF
-        self.open_btn.setStyleSheet(button_style)  # Apply style
+        self.open_btn.setObjectName("QPushButton")   # Add object name
         self.open_btn.clicked.connect(self.open_pdf)  # Connect to open function
         toolbar.addWidget(self.open_btn)  # Add to toolbar
         
         toolbar.addSeparator()  # Add separator
         
         self.prev_btn = QPushButton("◀ Previous")  # Button for previous page
-        self.prev_btn.setStyleSheet(button_style)  # Apply style
+        self.prev_btn.setObjectName("QPushButton")   # Add object name
         self.prev_btn.clicked.connect(self.previous_page)  # Connect to previous page function
         self.prev_btn.setEnabled(False)  # Initially disabled
         toolbar.addWidget(self.prev_btn)  # Add to toolbar
         
         self.next_btn = QPushButton("Next ▶")  # Button for next page
-        self.next_btn.setStyleSheet(button_style)  # Apply style
+        self.next_btn.setObjectName("QPushButton")   # Add object name
         self.next_btn.clicked.connect(self.next_page)  # Connect to next page function
         self.next_btn.setEnabled(False)  # Initially disabled
         toolbar.addWidget(self.next_btn)  # Add to toolbar
         
         self.page_label = QLabel("Page: 0/0")  # Label for current page
-        self.page_label.setStyleSheet("padding: 0 10px; color: #333;")  # Style for label
         toolbar.addWidget(self.page_label)  # Add to toolbar
         
         toolbar.addSeparator()  # Add separator
         
         self.zoom_in_btn = QPushButton("Zoom In (+)")  # Button for zooming in
-        self.zoom_in_btn.setStyleSheet(button_style)  # Apply style
+        self.zoom_in_btn.setObjectName("QPushButton")   # Add object name
         self.zoom_in_btn.clicked.connect(self.zoom_in_func)  # Connect to zoom in function
         self.zoom_in_btn.setEnabled(False)  # Initially disabled
         toolbar.addWidget(self.zoom_in_btn)  # Add to toolbar
         
         self.zoom_out_btn = QPushButton("Zoom Out (-)")  # Button for zooming out
-        self.zoom_out_btn.setStyleSheet(button_style)  # Apply style
+        self.zoom_out_btn.setObjectName("QPushButton")   # Add object name
         self.zoom_out_btn.clicked.connect(self.zoom_out_func)  # Connect to zoom out function
         self.zoom_out_btn.setEnabled(False)  # Initially disabled
         toolbar.addWidget(self.zoom_out_btn)  # Add to toolbar
         
         self.fit_btn = QPushButton("Fit Width")  # Button to fit PDF to width
-        self.fit_btn.setStyleSheet(button_style)  # Apply style
+        self.fit_btn.setObjectName("QPushButton")   # Add object name
         self.fit_btn.clicked.connect(self.fit_width)  # Connect to fit width function
         self.fit_btn.setEnabled(False)  # Initially disabled
         toolbar.addWidget(self.fit_btn)  # Add to toolbar
@@ -745,7 +501,7 @@ class PDFViewer(QMainWindow):
         
         # Add line spacing control
         spacing_label = QLabel("Line Spacing:")  # Label for line spacing
-        spacing_label.setStyleSheet("padding: 0 5px;")  # Style for label
+        #spacing_label.setStyleSheet("padding: 0 5px;")  # Style for label
         toolbar.addWidget(spacing_label)  # Add to toolbar
         
         self.spacing_spinbox = QDoubleSpinBox()  # Spin box for line spacing
@@ -759,7 +515,7 @@ class PDFViewer(QMainWindow):
         
         # Add auto-detect button
         detect_spacing_btn = QPushButton("Auto Detect")  # Button for auto-detecting spacing
-        detect_spacing_btn.setStyleSheet(button_style)  # Apply style
+        detect_spacing_btn.setObjectName("QPushButton")   # Add object name
         detect_spacing_btn.clicked.connect(self.auto_detect_spacing)  # Connect to auto-detect function
         toolbar.addWidget(detect_spacing_btn)  # Add to toolbar
 
@@ -799,14 +555,6 @@ class PDFViewer(QMainWindow):
         
         # Join paragraphs with double newlines
         return '\n\n'.join(cleaned_paragraphs)  # Return cleaned text
-
-    def copy_text(self):
-        """Copy selected text to clipboard"""
-        text = self.text_edit.toPlainText()  # Get text from text edit
-        if text:
-            clipboard = QApplication.clipboard()  # Access clipboard
-            clipboard.setText(text)  # Set text to clipboard
-            self.statusBar().showMessage("Text copied to clipboard")  # Update status bar
 
     def open_pdf(self):
         """Open a PDF file"""
@@ -997,16 +745,14 @@ class PDFViewer(QMainWindow):
             # Show translation is starting
             self.statusBar().showMessage("Starting translation...")
             self.translate_button.setEnabled(False)
-            self.translate_button.setText("Translating...")
             QApplication.processEvents()  # Force UI update
             
             # Get current source from source_combo, not stored value
-            current_source = self.source_combo.currentText()
-            print(f"Current source: {current_source}")  # Debug print
+            print(f"Current source: {self.current_source}")  # Debug print
             print(f"Current model: {self.current_model}")  # Debug print
             
             # Perform translation based on source
-            if current_source == "OpenAI":
+            if self.current_source == "OpenAI":
                 print("Using OpenAI translation")  # Debug print
                 translated_text = self.translate_with_openai(text)
             else:
@@ -1015,7 +761,7 @@ class PDFViewer(QMainWindow):
             
             if translated_text:
                 self.translated_text.setPlainText(translated_text)
-                self.statusBar().showMessage("Translation completed: {}".format(current_source))
+                self.statusBar().showMessage("Translation completed: {}:{}".format(self.current_source, self.current_model))
             else:
                 raise Exception("No translation result received")
             
@@ -1032,35 +778,62 @@ class PDFViewer(QMainWindow):
         finally:
             # Reset button state
             self.translate_button.setEnabled(True)
-            self.translate_button.setText("Translate")
             QApplication.processEvents()
 
     def translate_with_openai(self, text: str) -> str:
-        """Translate text using OpenAI API"""
-        print("Starting OpenAI translation...")  # Debug print
+        """Translate text using OpenAI API with streaming output"""
+        print("Starting OpenAI translation...")
         
         if not self.api_settings.get('openai_api_key'):
             raise Exception("OpenAI API key not configured. Please set it in API Settings (🔑)")
 
         try:
+            # Show progress bar
+            self.progress_bar.setVisible(True)
+            self.setIndeterminate(True)  # Switch to indeterminate mode
+            self.statusBar().showMessage("Starting translation...")
+            
             client = openai.OpenAI(api_key=self.api_settings['openai_api_key'])
             target_lang = self.language_combo.currentText()
             
-            print(f"Using OpenAI model: {self.current_model}")  # Debug print
-            print(f"Target language: {target_lang}")  # Debug print
+            print(f"Using OpenAI model: {self.current_model}")
+            print(f"Target language: {target_lang}")
             
-            response = client.chat.completions.create(
+            # Initialize translated text
+            translated_text = ""
+            self.translated_text.clear()
+            
+            # Create streaming response
+            stream = client.chat.completions.create(
                 model=self.current_model,
                 messages=[
                     {"role": "system", "content": "You are a professional translator."},
                     {"role": "user", "content": f"Translate the following text to {target_lang}. Output ONLY the translation:\n\n{text}"}
                 ],
                 temperature=0.3,
-                max_tokens=2000
+                stream=True  # Enable streaming
             )
             
-            translated_text = response.choices[0].message.content.strip()
-            print("OpenAI translation completed successfully")  # Debug print
+            # Process the stream
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    # Get the new text chunk
+                    new_text = chunk.choices[0].delta.content
+                    translated_text += new_text
+                    
+                    # Update the translation text area
+                    self.translated_text.setPlainText(translated_text)
+                    
+                    # Move cursor to end
+                    cursor = self.translated_text.textCursor()
+                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    self.translated_text.setTextCursor(cursor)
+                    
+                    # Force UI update
+                    QApplication.processEvents()
+            
+            print("OpenAI translation completed successfully")
+            self.statusBar().showMessage("Translation completed!")
             return translated_text
             
         except openai.AuthenticationError:
@@ -1068,67 +841,82 @@ class PDFViewer(QMainWindow):
         except openai.RateLimitError:
             raise Exception("OpenAI API rate limit exceeded. Please try again later.")
         except Exception as e:
-            print(f"OpenAI translation error: {str(e)}")  # Debug print
+            print(f"OpenAI translation error: {str(e)}")
             raise
+        finally:
+            # Hide progress bar and reset to normal mode
+            self.setIndeterminate(False)
+            self.progress_bar.setVisible(False)
+            QApplication.processEvents()
 
     def translate_with_ollama(self, text: str) -> str:
-        """Translate text using Ollama API"""
+        """Translate text using Ollama API with progress updates"""
         try:
-            print("Starting Ollama translation...")  # Debug print
-            print(f"Ollama host: {self.api_settings['ollama_host']}")  # Debug print
-            print(f"Current model: {self.current_model}")  # Debug print
+            print("Starting Ollama translation...")
             
-            # First check if Ollama is running
-            try:
-                health_check = requests.get(self.api_settings['ollama_host'])
-                health_check.raise_for_status()
-            except requests.exceptions.RequestException as e:
-                print(f"Ollama health check failed: {e}")  # Debug print
-                raise Exception(
-                    "Could not connect to Ollama. Please ensure:\n"
-                    "1. Ollama is installed\n"
-                    "2. Ollama service is running (run 'ollama serve')\n"
-                    "3. The host setting is correct"
-                )
-
-            url = f"{self.api_settings['ollama_host']}/api/generate"
-            target_lang = self.language_combo.currentText()
+            # Show progress bar
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(0)
             
-            prompt = (
-                f"You are a professional translator. Translate the following text to "
-                f"{target_lang}. Output ONLY the translation, without any explanations, "
-                f"notes, or special tokens. Keep the original structure and meaning:\n\n{text}"
-            )
+            # Split text into blocks (by paragraphs)
+            blocks = [b for b in text.split('\n\n') if b.strip()]
+            total_blocks = len(blocks)
+            translated_blocks = []
             
-            payload = {
-                "model": self.current_model,
-                "prompt": prompt,
-                "stream": False,
-                "temperature": 0.1,
-                "top_p": 0.9,
-                "top_k": 40
-            }
-            
-            print("Sending request to Ollama...")  # Debug print
-            #print(f"Payload: {payload}")  # Debug print
-            
-            response = requests.post(url, json=payload, timeout=30)  # Added timeout
-            #print(f"Response status code: {response.status_code}")  # Debug print
-            
-            if response.status_code != 200:
-                print(f"Error response: {response.text}")  # Debug print
-                raise Exception(f"Ollama API error: {response.text}")
+            for i, block in enumerate(blocks, 1):
+                # Update progress bar
+                progress = int((i - 1) / total_blocks * 100)
+                self.progress_bar.setValue(progress)
+                self.statusBar().showMessage(f"Translating block {i}/{total_blocks}...")
+                QApplication.processEvents()  # Allow UI updates
                 
-            result = response.json()
-            #print(f"Response received: {result}")  # Debug print
+                # Skip empty blocks
+                if not block.strip():
+                    continue
+                
+                url = f"{self.api_settings['ollama_host']}/api/generate"
+                target_lang = self.language_combo.currentText()
+                
+                prompt = (
+                    f"You are a professional translator. Translate the following text to "
+                    f"{target_lang}. Output ONLY the translation, without any explanations, "
+                    f"notes, or special tokens:\n\n{block}"
+                )
+                
+                payload = {
+                    "model": self.current_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "temperature": 0.1,
+                    "top_p": 0.9,
+                    "top_k": 40
+                }
+                
+                response = requests.post(url, json=payload, timeout=30)
+                
+                if response.status_code != 200:
+                    raise Exception(f"Ollama API error: {response.text}")
+                    
+                result = response.json()
+                translated_block = result.get('response', '').strip()
+                
+                if not translated_block:
+                    raise Exception(f"Empty response from Ollama for block {i}")
+                
+                translated_blocks.append(translated_block)
+                
+                # Update translation text area with progress
+                self.translated_text.setPlainText('\n\n'.join(translated_blocks))
+                QApplication.processEvents()  # Allow UI updates
             
-            translated_text = result.get('response', '').strip()
+            # Set final progress
+            self.progress_bar.setValue(100)
+            self.statusBar().showMessage("Translation completed!")
             
-            if not translated_text:
-                raise Exception("Empty response from Ollama")
+            # Hide progress bar after a delay
+            QTimer.singleShot(1000, lambda: self.progress_bar.setVisible(False))
             
-            print("Ollama translation completed successfully")  # Debug print
-            return translated_text
+            return '\n\n'.join(translated_blocks)
             
         except requests.exceptions.Timeout:
             raise Exception("Translation request timed out. Please try again.")
@@ -1141,12 +929,14 @@ class PDFViewer(QMainWindow):
                 "3. The host setting is correct"
             )
         except Exception as e:
-            print(f"Ollama translation error: {str(e)}")  # Debug print
+            print(f"Ollama translation error: {str(e)}")
             raise
+        finally:
+            # Ensure progress bar is hidden in case of error
+            self.progress_bar.setVisible(False)
 
     def change_model(self, model_name):
         """Handle model change"""
-        self.current_model = model_name
         self.statusBar().showMessage(f"Changed to model: {model_name}")
 
     def edit_prompt(self):
@@ -1273,47 +1063,15 @@ class PDFViewer(QMainWindow):
             self.api_settings = dialog.get_settings()
             self.save_api_settings()
             # Refresh model lists
-            self.model_sources["Ollama"] = self.get_ollama_models()
+            self.model_sources["Ollama"]["models"] = self.get_ollama_models()
             self.update_model_list(self.source_combo.currentText())
-
-    def update_model_list(self, source):
-        """Update model list based on selected source"""
-        print(f"Updating model list for source: {source}")  # Debug print
-        self.model_combo.clear()
-        
-        if source == "Ollama":
-            models = self.get_ollama_models()
-            default_model = "llama2-uncensored:latest"
-            if default_model not in models and models:
-                default_model = models[0]
-        elif source == "OpenAI":
-            models = ["gpt-3.5-turbo", "gpt-4"]
-            default_model = "gpt-3.5-turbo"
-        else:
-            models = []
-            default_model = None
-            print(f"Unknown source: {source}")  # Debug print
-        
-        self.model_combo.addItems(models)
-        
-        # Set the default model
-        if default_model and default_model in models:
-            index = self.model_combo.findText(default_model)
-            if index >= 0:
-                self.model_combo.setCurrentIndex(index)
-                self.current_model = default_model
-                print(f"Selected default model: {self.current_model}")  # Debug print
-        elif self.model_combo.count() > 0:
-            self.model_combo.setCurrentIndex(0)
-            self.current_model = self.model_combo.currentText()
-            print(f"Selected first available model: {self.current_model}")  # Debug print
 
     def on_source_changed(self, new_source):
         """Handle source change event"""
         print(f"Source changed to: {new_source}")  # Debug print
-        self.current_source = new_source
-        self.update_model_list(new_source)
-        
+        self.model_combo.clear()
+        self.model_combo.addItems(self.get_available_models(new_source))
+
         # Update cost estimate if OpenAI is selected
         if new_source == "OpenAI":
             self.update_cost_estimate()
@@ -1326,7 +1084,7 @@ class PDFViewer(QMainWindow):
                 )
         else:
             self.statusBar().showMessage(f"Changed to {new_source} models")
-
+                
     def update_cost_estimate(self):
         """Update the cost estimate in the status bar"""
         text = self.text_edit.toPlainText()
@@ -1373,6 +1131,21 @@ class PDFViewer(QMainWindow):
         # Estimate cost (assuming output is similar length to input)
         cost = (tokens * price["input"] + tokens * price["output"]) / 1000
         return cost
+    
+    @property
+    def current_source(self):
+        return self.source_combo.currentText()
+    
+    @property
+    def current_model(self):
+        return self.model_combo.currentText()
+
+    def setIndeterminate(self, indeterminate: bool):
+        """Set progress bar to indeterminate mode"""
+        if indeterminate:
+            self.progress_bar.setRange(0, 0)  # Makes the progress bar indeterminate
+        else:
+            self.progress_bar.setRange(0, 100)  # Restore normal range
 
 class APISettingsDialog(QDialog):
     def __init__(self, current_settings, parent=None):
@@ -1456,4 +1229,6 @@ if __name__ == '__main__':
         except ImportError:
             pass
     
-    sys.exit(app.exec()) 
+    app.exec()
+    sys.exit()
+    #sys.exit(app.exec())

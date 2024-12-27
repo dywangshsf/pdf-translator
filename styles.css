@@ -1,0 +1,111 @@
+QMainWindow {
+    background-color: #ffffff;
+    color: #000000;
+}
+
+QWidget {
+    background-color: #ffffff;
+    color: #000000;
+}
+
+QTextEdit {
+    background-color: #ffffff;
+    color: #000000;
+    border: 1px solid #cccccc;
+    border-radius: 3px;
+}
+
+QComboBox {
+    background-color: #ffffff;
+    color: #000000;
+    border: 1px solid #cccccc;
+}
+
+QLabel {
+    color: #000000;
+}
+
+QGraphicsView {
+    background-color: #ffffff;
+}
+
+/* Toolbar buttons */
+QPushButton {
+    padding: 6px 12px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background-color: #f8f9fa;
+    min-width: 80px;
+    margin: 0 2px;
+}
+
+QPushButton:hover {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+}
+
+QPushButton:pressed {
+    background-color: #dee2e6;
+}
+
+QPushButton:disabled {
+    background-color: #e9ecef;
+    color: #adb5bd;
+}
+
+/* Translate button specific style */
+#translate_button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 4px 12px;
+    border: none;
+    border-radius: 3px;
+    font-weight: bold;
+    min-height: 24px;
+    min-width: 60px;
+    max-width: 60px;
+}
+
+#translate_button:hover {
+    background-color: #45a049;
+}
+
+#translate_button:pressed {
+    background-color: #3d8b40;
+}
+
+#translate_button:disabled {
+    background-color: #cccccc;
+}
+
+/* Progress bar style */
+QProgressBar {
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    text-align: center;
+    height: 24px;
+}
+
+QProgressBar::chunk {
+    background-color: #4CAF50;
+}
+
+/* Dialog styles */
+QDialog {
+    background-color: white;
+}
+
+QDialog QLabel {
+    font-size: 11px;
+    min-width: 100px;
+}
+
+QDialog QLineEdit {
+    padding: 5px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+}
+
+QDialog QPushButton {
+    padding: 5px 15px;
+}
