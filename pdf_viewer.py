@@ -528,6 +528,7 @@ class PDFViewer(QMainWindow):
                 "Ollama Connection Error",
                 f"Could not connect to Ollama service: {str(e)}\n\n"
                 "Please ensure Ollama is installed and running."
+                "Follow: https://ollama.com/download"
             )
 
     def warmup_model(self):
