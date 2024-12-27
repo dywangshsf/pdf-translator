@@ -38,3 +38,10 @@ wheels/
 ehthumbs.db
 Thumbs.db
 icons/*.png
+# Build artifacts
+build/
+dist/
+*.egg-info/
+venv/
+*.pyc
+build_log.txt
